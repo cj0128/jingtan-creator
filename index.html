@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"
+    />
+    <meta name="format-detection" content="telephone=no,email=no,address=no" />
+    <title>鲸探创作者招募</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #050014;
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      #viewport {
+        width: 100vw;
+        height: 100vw;
+        max-width: 750px;
+        max-height: 750px;
+        margin: 0 auto;
+        position: relative;
+        overflow: hidden;
+        background: #050014;
+      }
+
+      #scrollWrap {
+        height: 100%;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        position: relative;
+      }
+
+      #stage {
+        width: 100%;
+        position: relative;
+        background: transparent;
+      }
+
+      /* 用 CSS 背景实现“裁掉状态栏” —— 更轻量、更稳 */
+      #poster {
+        width: 100%;
+        height: 0; /* JS 注入高度 */
+        position: relative;
+        background-image: url("./background.jpg");
+        background-repeat: no-repeat;
+        background-position: 0 0;
+        background-size: 100% auto; /* JS 注入精确 size */
+        will-change: background-position, background-size;
+      }
+
+      #fx {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 3;
+      }
+
+      .module {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #applyLink {
+        position: absolute;
+        z-index: 5;
+        display: block;
+        -webkit-tap-highlight-color: transparent;
+        background: transparent;
+        border-radius: 18px;
+      }
+
+      #qrImg {
+        position: absolute;
+        z-index: 6;
+        display: none;
+        -webkit-user-drag: none;
+        user-select: none;
+        pointer-events: auto; /* 长按识别 */
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewport" aria-label="鲸探创作者招募 H5">
+      <div id="scrollWrap">
+        <div id="stage">
+          <div id="poster" role="img" aria-label="鲸探创作者招募海报">
+            <section class="module" aria-label="头部（发光鲸鱼+主标题）"></section>
+            <section class="module" aria-label="什么是鲸探创作者"></section>
+            <section class="module" aria-label="能获得什么（5张福利卡片 2-2-1）"></section>
+            <section class="module" aria-label="如何加入（可点击报名链接）"></section>
+            <section class="module" aria-label="官方答疑群（可长按识别二维码）"></section>
+            <section class="module" aria-label="底部平台引流区"></section>
+          </div>
+
+          <a
+            id="applyLink"
+            href="https://jingtanbusiness.antgroup.com/settle"
+            target="_blank"
+            rel="noopener"
+            aria-label="点击报名"
+          ></a>
+          <img id="qrImg" alt="官方答疑群二维码" />
+          <canvas id="fx"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (() => {
+        const BASE_W = 750;
+        // background.jpg 实测尺寸：750x3801
+        // 这里把基准高度与背景图一致，避免定位叠层偏移。
+        const BASE_H = 3801;
+        // 背景图内容不需要裁掉状态栏（由外层 WebView 安全区处理更稳）。
+        const STATUS_CUT = 0;
+        const STAGE_H = BASE_H - STATUS_CUT;
+
+        // 叠层交互区域坐标（基于 background.jpg 的像素坐标）
+        // 用于：点击报名链接、以及长按识别二维码。
+        const APPLY_BOX = { x: 115, y: 2600 - STATUS_CUT, w: 520, h: 150 };
+        const QR_BOX = { x: 90, y: 2840 - STATUS_CUT, size: 420 };
+
+        const viewport = document.getElementById("viewport");
+        const scrollWrap = document.getElementById("scrollWrap");
+        const stage = document.getElementById("stage");
+        const poster = document.getElementById("poster");
+        const applyLink = document.getElementById("applyLink");
+        const qrImg = document.getElementById("qrImg");
+        const fx = document.getElementById("fx");
+        const ctx = fx.getContext("2d", { alpha: true });
+
+        const state = {
+          started: false,
+          scrollTop: 0,
+          qrReady: false,
+          particles: [],
+        };
+
+        function scale() {
+          return stage.clientWidth / BASE_W;
+        }
+
+        function mapOverlay() {
+          const k = scale();
+          applyLink.style.left = APPLY_BOX.x * k + "px";
+          applyLink.style.top = APPLY_BOX.y * k + "px";
+          applyLink.style.width = APPLY_BOX.w * k + "px";
+          applyLink.style.height = APPLY_BOX.h * k + "px";
+
+          if (state.qrReady) {
+            qrImg.style.left = QR_BOX.x * k + "px";
+            qrImg.style.top = QR_BOX.y * k + "px";
+            qrImg.style.width = QR_BOX.size * k + "px";
+            qrImg.style.height = QR_BOX.size * k + "px";
+            qrImg.style.display = "block";
+          }
+        }
+
+        function resizeStage() {
+          const sw = stage.clientWidth;
+          const sh = Math.round((sw * STAGE_H) / BASE_W);
+          stage.style.height = sh + "px";
+
+          // 关键：背景图按“原图比例”缩放，然后用负偏移裁掉状态栏
+          const fullH = Math.round((sw * BASE_H) / BASE_W);
+          const cutPx = Math.round((sw * STATUS_CUT) / BASE_W);
+          poster.style.height = sh + "px";
+          poster.style.backgroundSize = sw + "px " + fullH + "px";
+          poster.style.backgroundPosition = "0 " + -cutPx + "px";
+
+          mapOverlay();
+
+          const dpr = Math.max(1, Math.min(2.2, window.devicePixelRatio || 1));
+          fx.width = Math.floor(viewport.clientWidth * dpr);
+          fx.height = Math.floor(scrollWrap.clientHeight * dpr);
+          fx.style.width = viewport.clientWidth + "px";
+          fx.style.height = scrollWrap.clientHeight + "px";
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        function prepareBackground() {
+          return new Promise((resolve) => {
+            const img = new Image();
+            img.decoding = "async";
+            img.src = "./background.jpg";
+            img.onload = () => {
+              try {
+                // 只裁二维码的小块（真实 <img>，微信长按识别更稳）
+                const qrC = document.createElement("canvas");
+                qrC.width = QR_BOX.size;
+                qrC.height = QR_BOX.size;
+                const qg = qrC.getContext("2d");
+                qg.drawImage(
+                  img,
+                  QR_BOX.x,
+                  QR_BOX.y + STATUS_CUT, // 注意：二维码坐标基于“裁掉状态栏后”的舞台，需要加回 STATUS_CUT
+                  QR_BOX.size,
+                  QR_BOX.size,
+                  0,
+                  0,
+                  QR_BOX.size,
+                  QR_BOX.size
+                );
+                qrImg.src = qrC.toDataURL("image/png");
+                state.qrReady = true;
+                mapOverlay();
+              } catch (e) {
+                state.qrReady = false;
+              }
+              resolve();
+            };
+            img.onerror = () => {
+              resolve();
+            };
+          });
+        }
+
+        function initFx() {
+          const reduce = window.matchMedia
+            ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            : false;
+          const count = reduce ? 54 : 90;
+          state.particles = Array.from({ length: count }).map(() => ({
+            x: Math.random(),
+            y: Math.random(),
+            r: 0.5 + Math.random() * 1.4,
+            vx: -0.0001 + Math.random() * 0.0003,
+            vy: 0.015 + Math.random() * 0.04,
+            a: 0.14 + Math.random() * 0.3,
+            hue: Math.random() < 0.6 ? 185 + Math.random() * 55 : 285 + Math.random() * 35,
+          }));
+        }
+
+        function drawFx(t) {
+          if (!state.started) return;
+          const w = viewport.clientWidth;
+          const h = scrollWrap.clientHeight;
+          const now = t * 0.001;
+
+          ctx.clearRect(0, 0, w, h);
+
+          for (let i = 0; i < state.particles.length; i++) {
+            const p = state.particles[i];
+            p.y += p.vy * 0.0022;
+            if (p.y > 1.05) p.y = -0.05;
+            p.x += p.vx;
+            if (p.x < -0.05) p.x = 1.05;
+            if (p.x > 1.05) p.x = -0.05;
+
+            const worldY = p.y * STAGE_H;
+            const screenY = worldY * (w / BASE_W) - state.scrollTop;
+            if (screenY < -20 || screenY > h + 20) continue;
+
+            ctx.beginPath();
+            ctx.fillStyle = `hsla(${p.hue},92%,72%,${p.a})`;
+            ctx.arc(p.x * w, screenY, p.r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          ctx.save();
+          // 叠一层底部微弱“彩色波浪光”，尽量不压过背景静态效果。
+          ctx.globalAlpha = 0.14;
+          ctx.lineWidth = 1.1;
+          ctx.shadowBlur = 14;
+          ctx.shadowColor = "rgba(130,255,255,0.18)";
+
+          const grad = ctx.createLinearGradient(0, 0, w, 0);
+          grad.addColorStop(0, "rgba(110,120,255,0.45)");
+          grad.addColorStop(0.5, "rgba(110,255,255,0.42)");
+          grad.addColorStop(1, "rgba(255,110,220,0.38)");
+          ctx.strokeStyle = grad;
+
+          const baseY = h * 0.78 + Math.sin(now * 0.55) * 4;
+          ctx.beginPath();
+          for (let x = 0; x <= w; x += 14) {
+            const y =
+              baseY +
+              Math.sin((x / w) * Math.PI * 2 + now * 1.6) * 7 +
+              Math.sin((x / w) * Math.PI * 6 + now * 0.9) * 3;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.restore();
+
+          requestAnimationFrame(drawFx);
+        }
+
+        scrollWrap.addEventListener(
+          "scroll",
+          () => {
+            state.scrollTop = scrollWrap.scrollTop;
+          },
+          { passive: true }
+        );
+
+        window.addEventListener("resize", resizeStage);
+        window.addEventListener("load", () => {
+          resizeStage();
+          prepareBackground().then(() => {
+            initFx();
+            state.started = true;
+            requestAnimationFrame(drawFx);
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>
+
